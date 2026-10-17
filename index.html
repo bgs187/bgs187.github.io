@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Push-to-Talk Translator</title>
+<style>
+ body{font-family:Arial,sans-serif;background:#141414;color:#eee;margin:0;padding:14px;}
+ h1{font-size:22px;margin:0 0 10px;text-align:center}
+ .row{display:flex;gap:10px;margin-bottom:10px}
+ .side{flex:1;background:#222;border-radius:12px;padding:10px}
+ select{width:100%;font-size:18px;padding:8px;border-radius:8px;background:#333;color:#fff;border:1px solid #555}
+ .talk{width:100%;height:150px;font-size:26px;font-weight:bold;border:0;border-radius:16px;margin-top:10px;color:#fff;cursor:pointer;user-select:none;-webkit-user-select:none;touch-action:none}
+ #btnA{background:#1565c0} #btnB{background:#2e7d32}
+ .talk.live{background:#c62828 !important}
+ #status{text-align:center;color:#aaa;min-height:22px;font-size:16px}
+ #log{background:#1d1d1d;border-radius:12px;padding:10px;max-height:45vh;overflow:auto}
+ .msg{padding:8px;margin:6px 0;border-radius:8px;font-size:19px}
+ .a{background:#0d2a4d} .b{background:#14361a}
+ .orig{color:#aaa;font-size:15px}
+ .mode{text-align:center;font-size:15px;color:#bbb;margin-bottom:8px}
+</style>
+</head>
+<body>
+<h1>Push-to-Talk Translator</h1>
+<div class="mode"><label><input type="checkbox" id="holdMode" checked> Hold button while talking (uncheck = tap to start, tap to stop)</label></div>
+<div class="row">
+ <div class="side">
+  <select id="langA"></select>
+  <button class="talk" id="btnA">ME<br>talk</button>
+ </div>
+ <div class="side">
+  <select id="langB"></select>
+  <button class="talk" id="btnB">THEM<br>talk</button>
+ </div>
+</div>
+<div id="status">Pick languages, then press and hold a button to talk.</div>
+<div id="log"></div>
+<script>
+const LANGS=[["en","en-US","English"],["es","es-MX","Spanish"],["vi","vi-VN","Vietnamese"],["zh","zh-CN","Chinese (Mandarin)"],["ar","ar-SA","Arabic"],["fr","fr-FR","French"],["pt","pt-BR","Portuguese"],["de","de-DE","German"],["ko","ko-KR","Korean"],["ja","ja-JP","Japanese"],["hi","hi-IN","Hindi"],["ru","ru-RU","Russian"],["it","it-IT","Italian"],["tl","fil-PH","Tagalog"],["ht","ht-HT","Haitian Creole"],["so","so-SO","Somali"]];
+const $=id=>document.getElementById(id);
+for(const s of ["langA","langB"]) for(const [c,,n] of LANGS){const o=document.createElement("option");o.value=c;o.textContent=n;$(s).appendChild(o);}
+$("langA").value=localStorage.langA||"en"; $("langB").value=localStorage.langB||"es";
+$("langA").onchange=()=>localStorage.langA=$("langA").value;
+$("langB").onchange=()=>localStorage.langB=$("langB").value;
+const info=c=>LANGS.find(l=>l[0]===c);
+const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+if(!SR) $("status").textContent="This browser can't hear speech. Use Google Chrome (Android or PC) or Microsoft Edge.";
+let rec=null, active=null, finalText="";
+function start(who){
+ if(!SR||active) return;
+ speechSynthesis.cancel();
+ active=who; finalText="";
+ const from=info($(who==="A"?"langA":"langB").value);
+ rec=new SR(); rec.lang=from[1]; rec.interimResults=true; rec.continuous=true;
+ rec.onresult=e=>{let interim="";finalText="";for(const r of e.results){if(r.isFinal)finalText+=r[0].transcript;else interim+=r[0].transcript;} $("status").textContent="Hearing: "+(finalText+interim);};
+ rec.onerror=e=>{$("status").textContent="Mic error: "+e.error+(e.error==="not-allowed"?" (allow microphone access)":"");};
+ rec.onend=()=>finish(who);
+ $("btn"+who).classList.add("live");
+ $("status").textContent="Listening ("+from[2]+")...";
+ rec.start();
+}
+function stop(){ if(rec) rec.stop(); }
+let finishing=false;
+async function finish(who){
+ if(finishing) return; finishing=true;
+ $("btn"+who).classList.remove("live");
+ const text=finalText.trim() || $("status").textContent.replace(/^Hearing: /,"").trim();
+ active=null; rec=null;
+ if(!text || text.startsWith("Listening")){ $("status").textContent="Didn't catch that. Try again."; finishing=false; return; }
+ const from=info($(who==="A"?"langA":"langB").value), to=info($(who==="A"?"langB":"langA").value);
+ $("status").textContent="Translating...";
+ try{
+  const r=await fetch("https://api.mymemory.translated.net/get?q="+encodeURIComponent(text.slice(0,480))+"&langpair="+from[0]+"|"+to[0]);
+  const j=await r.json();
+  if(j.quotaFinished) throw new Error("daily free limit reached");
+  const out=j.responseData.translatedText;
+  const d=document.createElement("div"); d.className="msg "+(who==="A"?"a":"b");
+  d.innerHTML="<div>"+(who==="A"?"ME":"THEM")+" &rarr; "+to[2]+": <b></b></div><div class='orig'></div>";
+  d.querySelector("b").textContent=out; d.querySelector(".orig").textContent=from[2]+": "+text;
+  $("log").prepend(d);
+  const u=new SpeechSynthesisUtterance(out); u.lang=to[1];
+  const v=speechSynthesis.getVoices().find(v=>v.lang.toLowerCase().startsWith(to[0])); if(v) u.voice=v;
+  speechSynthesis.speak(u);
+  $("status").textContent="Ready.";
+ }catch(e){ $("status").textContent="Translate error: "+e.message+" (check internet)"; }
+ finishing=false;
+}
+for(const who of ["A","B"]){
+ const b=$("btn"+who);
+ b.addEventListener("pointerdown",e=>{e.preventDefault(); if($("holdMode").checked) start(who); else { if(active===who) stop(); else start(who);} });
+ b.addEventListener("pointerup",()=>{ if($("holdMode").checked && active===who) stop(); });
+ b.addEventListener("pointerleave",()=>{ if($("holdMode").checked && active===who) stop(); });
+ b.addEventListener("contextmenu",e=>e.preventDefault());
+}
+speechSynthesis.getVoices();
+</script>
+</body>
+</html>
